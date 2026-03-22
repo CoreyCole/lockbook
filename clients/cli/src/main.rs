@@ -8,6 +8,7 @@ mod list;
 mod migrate;
 mod share;
 mod stream;
+mod sync_dir;
 
 use std::env;
 use std::path::PathBuf;
@@ -226,6 +227,13 @@ fn run() -> CliResult<()> {
         .subcommand(
             Command::name("sync").description("sync your local changes back to lockbook servers") // todo also back
                 .handler(sync)
+        )
+        .subcommand(
+            Command::name("sync-dir").description("bidirectionally sync a lockbook folder with a local directory")
+                .input(Arg::<FileInput>::name("lockbook-folder").description("lockbook folder path or ID to sync")
+                    .completor(|prompt| input::file_completor(prompt, Some(Filter::FoldersOnly))))
+                .input(Arg::<PathBuf>::name("local-dir").description("local directory to sync with"))
+                .handler(|folder, dir| sync_dir::sync_dir(folder.get(), dir.get()))
         )
         .with_completions()
         .parse()
