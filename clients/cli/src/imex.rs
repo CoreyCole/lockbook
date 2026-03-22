@@ -10,7 +10,7 @@ use crate::input::FileInput;
 use crate::{core, ensure_account_and_root};
 
 #[tokio::main]
-pub async fn copy(disk: PathBuf, parent: FileInput) -> CliResult<()> {
+pub async fn copy(patch: bool, disk: PathBuf, parent: FileInput) -> CliResult<()> {
     let lb = &core().await?;
     ensure_account_and_root(lb).await?;
 
@@ -22,13 +22,18 @@ pub async fn copy(disk: PathBuf, parent: FileInput) -> CliResult<()> {
         ImportStatus::CalculatedTotal(n_files) => total.set(n_files),
         ImportStatus::StartingItem(disk_path) => {
             nth_file.set(nth_file.get() + 1);
-            print!("({}/{}) importing: {}... ", nth_file.get(), total.get(), disk_path);
+            let mode = if patch { "patching" } else { "importing" };
+            print!("({}/{}) {}: {}... ", nth_file.get(), total.get(), mode, disk_path);
             io::stdout().flush().unwrap();
         }
         ImportStatus::FinishedItem(_meta) => println!("done."),
     };
 
-    lb.import_files(&[disk], parent, &update_status).await?;
+    if patch {
+        lb.import_files_patch(&[disk], parent, &update_status).await?;
+    } else {
+        lb.import_files(&[disk], parent, &update_status).await?;
+    }
 
     Ok(())
 }

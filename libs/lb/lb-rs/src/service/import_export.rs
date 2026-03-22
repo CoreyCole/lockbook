@@ -5,6 +5,7 @@ use crate::model::file::File;
 use crate::model::file_metadata::FileType;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -119,6 +120,129 @@ impl Lb {
                     .collect::<LbResult<()>>()?;
             }
 
+            FileType::Link { .. } => {
+                error!("links should not be interpreted!")
+            }
+        }
+
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip(self, update_status), err(Debug))]
+    pub async fn import_files_patch<F: Fn(ImportStatus)>(
+        &self, sources: &[PathBuf], dest: Uuid, update_status: &F,
+    ) -> LbResult<()> {
+        update_status(ImportStatus::CalculatedTotal(get_total_child_count(sources)?));
+
+        let parent = self.get_file_by_id(dest).await?;
+        if !parent.is_folder() {
+            return Err(LbErrKind::Validation(ValidationFailure::NonFolderWithChildren(dest)))?;
+        }
+
+        // Build path map upfront: one call to list_metadatas + list_paths_with_ids
+        let all_files = self.list_metadatas().await?;
+        let by_id: HashMap<Uuid, File> = all_files.into_iter().map(|f| (f.id, f)).collect();
+        let paths = self.list_paths_with_ids(None).await?;
+        let path_map: HashMap<String, File> = paths
+            .into_iter()
+            .filter_map(|(id, path)| by_id.get(&id).cloned().map(|f| (path, f)))
+            .collect();
+
+        let dest_lb_path = self.get_path_by_id(dest).await?;
+
+        let import_file_futures = FuturesUnordered::new();
+
+        for source in sources {
+            let lb = self.clone();
+            let dest_lb_path = dest_lb_path.clone();
+            let path_map = path_map.clone();
+
+            import_file_futures.push(async move {
+                lb.import_file_recursively_patch(source, dest, &dest_lb_path, &path_map, update_status)
+                    .await
+            });
+        }
+
+        import_file_futures
+            .collect::<Vec<LbResult<()>>>()
+            .await
+            .into_iter()
+            .collect::<LbResult<()>>()
+    }
+
+    async fn import_file_recursively_patch<F: Fn(ImportStatus)>(
+        &self, disk_path: &Path, dest: Uuid, dest_lb_path: &str,
+        path_map: &HashMap<String, File>, update_status: &F,
+    ) -> LbResult<()> {
+        update_status(ImportStatus::StartingItem(format!("{}", disk_path.display())));
+
+        if !disk_path.exists() {
+            return Err(LbErrKind::DiskPathInvalid.into());
+        }
+
+        let name = disk_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(LbErrKind::DiskPathInvalid)?
+            .to_string();
+
+        let file_type = if disk_path.is_file() { FileType::Document } else { FileType::Folder };
+
+        let lb_path = format!("{}/{}", dest_lb_path.trim_end_matches('/'), name);
+
+        let lookup_key = if disk_path.is_dir() {
+            format!("{}/", lb_path)
+        } else {
+            lb_path.clone()
+        };
+
+        let file = match path_map.get(&lookup_key) {
+            Some(existing) => {
+                if existing.is_folder() != disk_path.is_dir() {
+                    return Err(LbErrKind::Unexpected(format!(
+                        "type mismatch for '{}': disk is a {} but lockbook has a {}",
+                        name,
+                        if disk_path.is_dir() { "folder" } else { "document" },
+                        if existing.is_folder() { "folder" } else { "document" },
+                    ))
+                    .into());
+                }
+                existing.clone()
+            }
+            None => self.create_file(&name, &dest, file_type).await?,
+        };
+
+        match file_type {
+            FileType::Document => {
+                let content = fs::read(disk_path).map_err(LbErr::from)?;
+                self.write_document(file.id, content.as_slice()).await?;
+                update_status(ImportStatus::FinishedItem(file));
+            }
+            FileType::Folder => {
+                let id = file.id;
+                update_status(ImportStatus::FinishedItem(file));
+
+                let disk_children = fs::read_dir(disk_path).map_err(LbErr::from)?;
+                let import_file_futures = FuturesUnordered::new();
+
+                for disk_child in disk_children {
+                    let child_path = disk_child.map_err(LbErr::from)?.path();
+                    let lb = self.clone();
+                    let lb_path = lb_path.clone();
+                    let path_map = path_map.clone();
+
+                    import_file_futures.push(async move {
+                        lb.import_file_recursively_patch(&child_path, id, &lb_path, &path_map, update_status)
+                            .await
+                    });
+                }
+
+                import_file_futures
+                    .collect::<Vec<LbResult<()>>>()
+                    .await
+                    .into_iter()
+                    .collect::<LbResult<()>>()?;
+            }
             FileType::Link { .. } => {
                 error!("links should not be interpreted!")
             }
