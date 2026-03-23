@@ -15,6 +15,7 @@ struct ChatState {
 #[derive(serde::Serialize)]
 struct WebhookPayload {
     thread: String,
+    file_id: String,
     messages: Vec<WebhookMessage>,
     sync_dir: String,
     agent_name: String,
@@ -28,13 +29,14 @@ struct WebhookMessage {
 }
 
 /// Extract .chat entries from .sync-dir-state, keyed by local_path.
+/// Returns (file_id, content_hash) tuples so the UUID can be included in webhook payloads.
 fn chat_entries_from_fs_base(
     fs_base: &HashMap<Uuid, FsBaseEntry>,
-) -> HashMap<&str, [u8; 32]> {
+) -> HashMap<&str, (Uuid, [u8; 32])> {
     fs_base
-        .values()
-        .filter(|e| e.local_path.ends_with(".chat"))
-        .map(|e| (e.local_path.as_str(), e.content_hash))
+        .iter()
+        .filter(|(_, e)| e.local_path.ends_with(".chat"))
+        .map(|(id, e)| (e.local_path.as_str(), (*id, e.content_hash)))
         .collect()
 }
 
@@ -102,7 +104,7 @@ fn poll_once(
     let fs_base = load_fs_base(local_dir);
     let chat_entries = chat_entries_from_fs_base(&fs_base);
 
-    for (rel_path, fs_base_hash) in &chat_entries {
+    for (rel_path, (file_id, fs_base_hash)) in &chat_entries {
         let chat_state = state.entry(rel_path.to_string()).or_insert_with(|| {
             // New file discovered after initialization — dispatch all human messages
             ChatState { content_hash: [0; 32], last_processed_ts: 0 }
@@ -114,6 +116,7 @@ fn poll_once(
         if !new_msgs.is_empty() {
             let payload = WebhookPayload {
                 thread: rel_path.to_string(),
+                file_id: file_id.to_string(),
                 messages: new_msgs
                     .iter()
                     .map(|m| WebhookMessage {
