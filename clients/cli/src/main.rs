@@ -1,4 +1,5 @@
 mod account;
+mod chat_poll;
 mod debug;
 mod edit;
 mod imex;
@@ -8,7 +9,7 @@ mod list;
 mod migrate;
 mod share;
 mod stream;
-mod sync_dir;
+pub(crate) mod sync_dir;
 
 use std::env;
 use std::path::PathBuf;
@@ -240,6 +241,20 @@ fn run() -> CliResult<()> {
                     let interval: String = interval.get();
                     let interval = if interval.is_empty() { None } else { Some(interval) };
                     sync_dir::run(folder.get(), dir.get(), interval, no_watch.get(), once.get())
+                })
+        )
+        .subcommand(
+            Command::name("chat-poll")
+                .description("poll synced .chat files for new messages and POST to OpenClaw")
+                .input(Arg::str("local-dir").description("synced directory to monitor"))
+                .input(Arg::str("agent-name").description("agent's lockbook username"))
+                .input(Arg::str("webhook-url").description("OpenClaw gateway webhook URL"))
+                .input(Flag::<String>::new("poll-interval").description("poll interval (default: 5s)"))
+                .input(Flag::bool("once").description("poll once and exit"))
+                .handler(|dir, agent, url, interval, once| {
+                    let interval: String = interval.get();
+                    let interval = if interval.is_empty() { None } else { Some(interval) };
+                    chat_poll::run(dir.get(), agent.get(), url.get(), interval, once.get())
                 })
         )
         .with_completions()

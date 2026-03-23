@@ -122,13 +122,13 @@ impl From<LbErr> for SyncDirError {
 // --- fs_base: last agreed state between local filesystem and lockbook ---
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct FsBaseEntry {
-    local_path: String,
-    content_hash: [u8; 32],
-    lb_last_modified: u64,
+pub(crate) struct FsBaseEntry {
+    pub(crate) local_path: String,
+    pub(crate) content_hash: [u8; 32],
+    pub(crate) lb_last_modified: u64,
 }
 
-fn load_fs_base(local_dir: &Path) -> HashMap<Uuid, FsBaseEntry> {
+pub(crate) fn load_fs_base(local_dir: &Path) -> HashMap<Uuid, FsBaseEntry> {
     let path = local_dir.join(".sync-dir-state");
     match fs::read(&path) {
         Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
