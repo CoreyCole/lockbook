@@ -8,6 +8,7 @@ mod list;
 mod migrate;
 mod share;
 mod stream;
+mod sync_dir;
 
 use std::env;
 use std::path::PathBuf;
@@ -226,6 +227,20 @@ fn run() -> CliResult<()> {
         .subcommand(
             Command::name("sync").description("sync your local changes back to lockbook servers") // todo also back
                 .handler(sync)
+        )
+        .subcommand(
+            Command::name("sync-dir")
+                .description("bidirectionally sync a local directory with a lockbook folder")
+                .input(Arg::str("lockbook-folder").description("lockbook folder path (e.g. .openclaw)"))
+                .input(Arg::str("local-dir").description("local directory path (e.g. ~/.openclaw)"))
+                .input(Flag::<String>::new("pull-interval").description("remote poll interval (default: 5s)"))
+                .input(Flag::bool("no-watch").description("disable filesystem watcher, poll only"))
+                .input(Flag::bool("once").description("reconcile once and exit"))
+                .handler(|folder, dir, interval, no_watch, once| {
+                    let interval: String = interval.get();
+                    let interval = if interval.is_empty() { None } else { Some(interval) };
+                    sync_dir::run(folder.get(), dir.get(), interval, no_watch.get(), once.get())
+                })
         )
         .with_completions()
         .parse()
